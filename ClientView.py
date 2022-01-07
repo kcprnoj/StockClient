@@ -2,7 +2,7 @@ import sys
 from matplotlib.backends.backend_qt5 import MainWindow
 from pandas.core.frame import DataFrame
 import qdarkstyle
-from PyQt5.QtWidgets import QAction, QApplication, QDateEdit, QFileDialog, QListWidget, QComboBox, QPushButton, QRadioButton, QSizePolicy, QTableView, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit
+from PyQt5.QtWidgets import QAction, QApplication, QDateEdit, QErrorMessage, QFileDialog, QListWidget, QComboBox, QMessageBox, QPushButton, QRadioButton, QSizePolicy, QTableView, QVBoxLayout, QHBoxLayout, QWidget, QLabel, QLineEdit
 from PyQt5.QtCore import QAbstractTableModel, QDateTime, QMutex, QObject, QThread, Qt, pyqtSignal
 from PyQt5.QtGui import QIcon
 from Controller import Controller
@@ -19,6 +19,7 @@ class ClientView(QWidget):
     dataSingal = pyqtSignal()
     companiesSignal = pyqtSignal()
     companySignal = pyqtSignal()
+    messageSignal = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -27,6 +28,8 @@ class ClientView(QWidget):
         self.setWindowIcon(QIcon('logo.png'))
 
         self.controller = Controller()
+
+        self.messageSignal.connect(self.display_message)
 
         #Setup signals and mutexes for data
         self.companies = []
@@ -40,6 +43,7 @@ class ClientView(QWidget):
         self.data = None
         self.dataMutex = QMutex()
         self.dataSingal.connect(self.update_plot)
+        self.volume = True
 
         self.layout = QVBoxLayout()
 
@@ -103,10 +107,12 @@ class ClientView(QWidget):
         label_start = QLabel('Start date: ')
         label_end = QLabel('End date: ')
         label_type = QLabel('Plot type: ')
+        label_interval = QLabel('Interval: ')
         layoutPlotLabels = QHBoxLayout()
         layoutPlotLabels.addWidget(label_start)
         layoutPlotLabels.addWidget(label_end)
         layoutPlotLabels.addWidget(label_type)
+        layoutPlotLabels.addWidget(label_interval)
         layoutPlotLabels.setAlignment(Qt.AlignTop)
         self.layoutEquity.addLayout(layoutPlotLabels)
 
@@ -129,21 +135,39 @@ class ClientView(QWidget):
         layoutControls.setAlignment(Qt.AlignTop)
         self.layoutEquity.addLayout(layoutControls)
 
+        #Invterval
+        self.comboInterval = QComboBox()
+        self.comboInterval.addItems(['1D', '7D', '1M'])
+        self.comboInterval.currentIndexChanged.connect(self.start_historical_data)
+        layoutControls.addWidget(self.comboInterval)
+        layoutControls.setAlignment(Qt.AlignTop)
+        self.layoutEquity.addLayout(layoutControls)
+
         #Buttons
         layoutButtons = QHBoxLayout()
         saveDataButton = QPushButton()
         saveDataButton.clicked.connect(lambda: self.saveFile.triggered.emit())
         saveDataButton.setText("Save data to csv")
-        self.volumeButton = AnimatedToggle()
-        layoutButtons.addWidget(self.volumeButton)
         layoutButtons.addWidget(saveDataButton)
-        self.layoutEquity.addLayout(layoutButtons)
-
 
         savePlotButton = QPushButton()
         savePlotButton.clicked.connect(lambda: self.savePlot.triggered.emit())
         savePlotButton.setText("Save plot")
         layoutButtons.addWidget(savePlotButton)
+        self.layoutEquity.addLayout(layoutButtons)
+
+        label_volume = QLabel('Volume :')
+        label_volume.setMaximumWidth(50)
+        self.volumeButton = AnimatedToggle(
+        bar_color=Qt.darkGray,
+        checked_color="#26486B",
+        handle_color=Qt.gray,
+        )
+        self.volumeButton.toggle()
+        self.volumeButton.setMaximumWidth(100)
+        self.volumeButton.toggled.connect(self.setVolume)
+        layoutButtons.addWidget(label_volume)
+        layoutButtons.addWidget(self.volumeButton)
         self.layoutEquity.addLayout(layoutButtons)
 
         self.layoutEquitiesWidgets.addLayout(self.layoutEquity)
@@ -156,6 +180,10 @@ class ClientView(QWidget):
         layoutStatus.addWidget(appVersion, alignment=Qt.AlignRight)
         self.layout.addLayout(layoutStatus)
         self.setLayout(self.layout)
+
+    def setVolume(self, state):
+        self.volume = state
+        self.update_plot()
 
     def setup_save_data(self):
         self.saveFile = QAction("&Save File", self)
@@ -171,7 +199,7 @@ class ClientView(QWidget):
         print(name[0])
         if self.comboType.currentText() != None and self.data is not None and name[0] != '':
             fig, axlist = mpf.plot(self.data, type=self.comboType.currentText(), show_nontrading=False, xrotation=20, \
-                        datetime_format='%d/%m/%Y', returnfig=True, volume=True)
+                        datetime_format='%d/%m/%Y', returnfig=True, volume=self.volume)
             fig.savefig(name[0])
         self.dataMutex.unlock()
 
@@ -200,7 +228,7 @@ class ClientView(QWidget):
             self.canvas.setParent(None)
         plt.close('all')
         fig, axlist = mpf.plot(self.data, type=self.comboType.currentText(), show_nontrading=False, xrotation=20, \
-                                datetime_format='%d/%m/%Y', returnfig=True, style = style, volume=True, tight_layout = True)
+                                datetime_format='%d/%m/%Y', returnfig=True, style = style, volume=self.volume, tight_layout = True)
         self.canvas = FigureCanvasQTAgg(fig)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.layoutEquity.addWidget(self.canvas)
@@ -227,10 +255,14 @@ class ClientView(QWidget):
     def set_data_sync(self):
         self.companyMutex.lock()
         print(current_thread().name + " Updating Data")
-        if self.listWidgetEquities.currentItem() != None:
-            self.data = self.controller.get_historical(self.listWidgetEquities.currentItem().text(), start = self.dateStart.text(), end = self.dateEnd.text())
-        if self.data is not None:
+        data = None
+        if self.listWidgetEquities.currentItem() is not None:
+            data = self.controller.get_historical(self.listWidgetEquities.currentItem().text(), start = self.dateStart.text(), end = self.dateEnd.text(), interval= self.comboInterval.currentText())
+        if data is not None:
+            self.data = data
             self.dataSingal.emit()
+        else:
+            self.messageSignal.emit()
         self.companyMutex.unlock()
 
     def start_company(self):
@@ -240,9 +272,13 @@ class ClientView(QWidget):
     def set_company_sync(self):
         self.companyMutex.lock()
         print(current_thread().name + " Updating Company")
-        if self.listWidgetEquities.currentItem() != None:
-            self.company = self.controller.get_company(self.listWidgetEquities.currentItem().text())
-            self.companySignal.emit()
+        if self.listWidgetEquities.currentItem() is not None:
+            company = self.controller.get_company(self.listWidgetEquities.currentItem().text())
+            if company is not None:
+                self.company = company
+                self.companySignal.emit()
+            else:
+                self.messageSignal.emit()
         self.companyMutex.unlock()
 
     def start_companies(self):
@@ -252,9 +288,22 @@ class ClientView(QWidget):
     def set_companies_sync(self):
         self.companiesMutex.lock()
         print(current_thread().name + " Updating Companies")
-        self.companies = self.controller.get_index_companies(self.comboIndexes.currentText())['Name'].tolist()
-        self.companiesSignal.emit()
+        result = self.controller.get_index_companies(self.comboIndexes.currentText())
+        if result is not None:
+            self.companies = result['Name'].tolist()
+            self.companiesSignal.emit()
+        else:
+            self.messageSignal.emit()
         self.companiesMutex.unlock()
+
+    def display_message(self):
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Information)
+        msg.setText("Sorry couldn't get information from server.")
+        msg.setWindowTitle("Server Error")
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec_()
+
 
 class TableModel(QAbstractTableModel):
 
@@ -283,9 +332,9 @@ class TableModel(QAbstractTableModel):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setStyleSheet(qdarkstyle.load_stylesheet())
 
     clientView = ClientView()
-    clientView.setStyleSheet(qdarkstyle.load_stylesheet())
     clientView.show()
 
     try:

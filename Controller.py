@@ -13,13 +13,15 @@ class Controller:
         dic = loads(response.text)
         return dic
 
-    def get_historical(self, name, start = None, end = None):
+    def get_historical(self, name, start = None, end = None, interval = None):
         name = name.replace('&', '%26')
         data = f'name={name}'
         if start != None:
             data += f'&start={start}'
         if end != None:
             data += f'&end={end}'
+        if interval != None or interval != '1D':
+            data += f'&interval={interval}'
         response = get(self.server + f'/historical_data?{data}')
         if response.status_code != 200:
             return None
